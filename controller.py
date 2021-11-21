@@ -22,7 +22,7 @@ from pox.lib.addresses import IPAddr, EthAddr
 
 log = core.getLogger()
 
-TTL = 30
+TTL = 10
 IDLE_TTL = TTL
 HARD_TTL = TTL
 
@@ -81,8 +81,6 @@ class Controller(EventMixin):
                     dpid, dst_mac, self.mac_port[dpid][dst_mac]))
                     self.mac_port[dpid].pop(dst_mac)
                     self.macport_ttl[dpid].pop(dst_mac)
-
-                    # get the queue it should go into
 
         # Check the packet and decide how to route the packet
         def forward(message = None):

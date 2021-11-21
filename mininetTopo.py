@@ -68,7 +68,7 @@ def startNetwork():
             cmd = 'sudo ovs-vsctl -- set Port %s qos=@newqos \
                         -- --id=@newqos create QoS type=linux-htb other-config:max-rate=%s queues=0=@q0,1=@q1 \
                         -- --id=@q0 create Queue other-config:max-rate=%s \
-                        -- --id=@q1 create Queue other-config:min-rate=%s' % (interface, bw, 0.5 * bw, 0.8 * bw)
+                        -- --id=@q1 create Queue other-config:min-rate=%s' % (interface, bw, bw//2, 0.8 * bw)
 
             os.system(cmd)
 
@@ -85,6 +85,9 @@ def startNetwork():
     net.start()
 
     set_qos()
+
+    qos_status = os.popen("ovs-ofctl queue-stats s1 2").read()
+    print(qos_status)
 
     info('** Running CLI\n')
     CLI(net)
