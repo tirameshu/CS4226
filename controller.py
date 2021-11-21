@@ -36,29 +36,26 @@ class Controller(EventMixin):
     def __init__(self):
         self.listenTo(core.openflow)
         core.openflow_discovery.addListeners(self)
-        # Used to store MAC address and ports (Task 2)
-        self.mac_port = {}
-        self.macport_ttl = {}
 
-        # For Premium Service Class (Task 4)
+        self.mac_port = {} # {switch: {mac_addr: out_port}}
+        self.macport_ttl = {} # ttl for mapping above
+
+        # list of premium hosts
         self.premium = []
 
-    # You can write other functions as you need.
     def _handle_PacketIn (self, event):
-        # For local variable reference
         packet = event.parsed
         dpid = event.dpid
         in_port = event.port
         src_mac = packet.src
         dst_mac = packet.dst
 
-        log.info("=== Entry: At s%s, src_mac=%s, dst_mac=%s ===", dpid, src_mac, dst_mac)
+        log.debug("=== Entry: At s%s, src_mac=%s, dst_mac=%s ===", dpid, src_mac, dst_mac)
 
-        # install entries to the route table
         def install_enqueue(event, packet, out_port, qid):
-            log.info("Installing flow for %s:%i -> %s:%i", src_mac, in_port, dst_mac, out_port)
+            log.debug("Installing flow for %s:%i -> %s:%i", src_mac, in_port, dst_mac, out_port)
             message = of.ofp_flow_mod()
-            message.match = of.ofp_match.from_packet(packet, in_port)
+            message.match = of.ofp_match.from_packet(packet, in_port) # same info as received packet
             message.actions.append(of.ofp_action_enqueue(port = out_port, queue_id = qid))
             message.data = event.ofp
 
@@ -67,17 +64,12 @@ class Controller(EventMixin):
             message.hard_timeout = HARD_TTL
             message.priority = QOS_PRIORITY
             event.connection.send(message)
-            log.info("Packet with queue ID %i sent via out_port %i\n", qid, out_port)
             return
 
         def clear_expired():
-            '''
-            Remove expired entries in mac port table
-            '''
-            assert(dpid in self.macport_ttl)
             if dst_mac in self.macport_ttl[dpid] and self.macport_ttl[dpid][dst_mac] + datetime.timedelta(
                     seconds=TTL) <= datetime.datetime.now():
-                    log.debug("** Switch %i: Timeout!... Unlearn MAC: %s, Port: %s" % (
+                    log.debug("** TIMEOUT in switch %i! Removing mac: %s, port: %s" % (
                     dpid, dst_mac, self.mac_port[dpid][dst_mac]))
                     self.mac_port[dpid].pop(dst_mac)
                     self.macport_ttl[dpid].pop(dst_mac)
@@ -85,53 +77,51 @@ class Controller(EventMixin):
         # Check the packet and decide how to route the packet
         def forward(message = None):
 
-            # Store the in_port from where the packet comes from if empty
+            # create mapping for switch
             if dpid not in self.mac_port:
                 self.mac_port[dpid] = {}
                 self.macport_ttl[dpid] = {}
 
+            # save port to reach src of incoming packet
             if self.mac_port[dpid].get(src_mac) == None:
                 self.mac_port[dpid][src_mac] = in_port
                 self.macport_ttl[dpid][src_mac] = datetime.datetime.now()
 
-
-            # Get src_mac and dst_mac IP address from the packet
             src_ip = None
             dst_ip = None
+            packet_type = "Unknown"
 
-            # Checks the packet type to determine where to send the packet (Task 3/4)
+            # get src and dst ip depending on packet type
             if packet.type == packet.IP_TYPE:
-                log.info("Packet is IP type %s", packet.type)
                 ip_packet = packet.payload
                 src_ip = ip_packet.srcip
                 dst_ip = ip_packet.dstip
+                packet_type = "IP"
             elif packet.type == packet.ARP_TYPE:
-                log.info("Packet is ARP type %s", packet.type)
                 arppacket = packet.payload
                 src_ip = arppacket.protosrc
                 dst_ip = arppacket.protodst
-            else:
-                log.info("Packet is Unknown type %s", packet.type)
-                src_ip = None
-                dst_ip = None
+                packet_type = "ARP"
+
+            log.debug("%s packet received, src_ip=%s, dst_ip=%s", packet_type, src_ip, dst_ip)
 
             qid = REGULAR
-            if src_ip and dst_ip in self.premium:
+            if src_ip in self.premium and dst_ip in self.premium:
                 qid = PREMIUM
 
-            # If packet dst_mac indicates it is a multicast, packet is flooded (Task 2)
+            # flood both multicast and when dst unknown
+            # no flow installed
             if dst_mac.is_multicast:
                 return flood("Multicast to dst_mac %s -- flooding" % (dst_mac))
 
-            # If port to reach dst_mac is not found, packet is flooded (Task 2)
             if dst_mac not in self.mac_port[dpid]:
                 return flood("Destination dst_mac %s unknown -- flooding" % (dst_mac))
 
-            # Add the node in_port to the route table for learning switch (Task 2)
+            # dst known, send packet
             out_port = self.mac_port[dpid][dst_mac]
             install_enqueue(event, packet, out_port, qid)
 
-        # When it knows nothing about the dst_mac, flood but don't install the rule (Task 2)
+        # When it knows nothing about the destination, flood but don't install the rule
         def flood (message = None):
             log.debug(message)
             floodmsg = of.ofp_packet_out()
@@ -139,7 +129,7 @@ class Controller(EventMixin):
             floodmsg.data = event.ofp
             floodmsg.in_port = in_port
             event.connection.send(floodmsg)
-            log.info("Flooding...")
+            log.debug("Flooding...")
             return
 
         forward()
@@ -178,18 +168,21 @@ class Controller(EventMixin):
 
             msg = of.ofp_flow_mod()
             msg.priority = FIREWALL_PRIORITY
-            # msg.actions.append(of.ofp_action_output(port=of.OFPP_NONE))
             # only block tcp, so of ip type
             msg.match.dl_type = 0x800
             # only block tcp, so header protocol should be 6
             msg.match.nw_proto = 6
-            # match the ip addr
+            # match src ip if provided
             if src_ip:
                 msg.match.nw_src = IPAddr(src_ip)
 
             # dst_ip and in_port will alw exist
             msg.match.nw_dst = IPAddr(dst_ip)
             msg.match.tp_dst = int(in_port)
+
+            # problem: using port=of.OFPP_NONE triggers error with controller,
+            # commenting it out allows firewall to work as expected
+            # msg.actions.append(of.ofp_action_output(port=of.OFPP_NONE))
 
             connection.send(msg)
             log.info("** Switch %s: Added firewall rules, src=%s, dst=%s:%s" % (dpid, src_ip, dst_ip, in_port))

@@ -20,15 +20,13 @@ interface_bw = {}
 class TreeTopo(Topo):
 
     def __init__(self):
-        # Initialize topology
         Topo.__init__(self)
 
-        # Gets the names and number of hosts, switches and links from topology.in (Task 1)
         filename = "topology.in"
         with open(filename, "r") as topo_input:
             firstline = topo_input.readline().split(' ')
 
-            # Number of hosts, switches and links are stored in the first line of topology.in (Task 1)
+            # Read number of hosts, switches and links
             num_hosts = int(firstline[0])
             num_switches = int(firstline[1])
             num_links = int(firstline[2])
@@ -36,29 +34,30 @@ class TreeTopo(Topo):
             # Add hosts to the mininet
             # > self.addHost('h%d' % [HOST NUMBER])
             for i in range(num_hosts):
-                host = self.addHost('h%d' % (i+1))
+                self.addHost('h%d' % (i+1))
 
             # Add switches to the mininet
             # > sconfig = {'dpid': "%016x" % [SWITCH NUMBER]}
             # > self.addSwitch('s%d' % [SWITCH NUMBER], **sconfig)
             for j in range(num_switches):
                 sconfig = {'dpid': "%016x" % (j+1)}
-                switch = self.addSwitch('s%d' % (j+1), **sconfig)
+                self.addSwitch('s%d' % (j+1), **sconfig)
 
             # Add links to the mininet
             # > self.addLink([HOST1], [HOST2])
             for k in range(num_links):
+                # 2nd line onwards has 3 params describing links
                 link = topo_input.readline().strip().split(',')
                 node1 = link[0]
                 node2 = link[1]
-                bw = int(link[2]) * 1000000
+                bw = int(link[2]) * 1000000 # convert link bandwidth to bps
 
                 self.addLink(node1, node2, bw=bw)
 
                 # for qos
-                port = self.port(node2, node1)[0] # src port = port for switch
+                port = self.port(node2, node1)[0] # get port for switch
                 interface = "%s-eth%s" % (node2, port) # eg s1-eth1
-                interface_bw[interface] = bw
+                interface_bw[interface] = bw # to assign upper and lower bounds later
 
 
 def startNetwork():
@@ -85,9 +84,9 @@ def startNetwork():
     net.start()
 
     set_qos()
-
-    qos_status = os.popen("ovs-ofctl queue-stats s1 2").read()
-    print(qos_status)
+    #
+    # qos_status = os.popen("ovs-ofctl queue-stats s1 2").read()
+    # print(qos_status)
 
     info('** Running CLI\n')
     CLI(net)
